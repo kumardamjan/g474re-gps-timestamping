@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdlib.h>
+#include "config.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -62,6 +63,8 @@ UART_HandleTypeDef huart4;
 
 /* USER CODE BEGIN PV */
 MsgType msg = {0xDDDDAC00, 11111111, 11111111, 11111111, 1, 1};
+const uint32_t sendUartPeriodUs = (uint32_t)(1.0f/(float)UART_SEND_FREQUENCY_HZ * 1e6f);
+const uint32_t tim3Prescaler = (170*1e6 / ADC_SAMPLING_FREQUENCY_HZ) - 1;
 
 /* USER CODE END PV */
 
@@ -93,10 +96,20 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
   }
 }
 
+uint32_t GetTimer1Counter()
+{
+  return __HAL_TIM_GET_COUNTER(&htim1);
+}
+
+void ResetTimer1Counter()
+{
+  __HAL_TIM_SET_COUNTER(&htim1, 0);
+}
+
 void Delay_us(uint16_t us)
 {
-  __HAL_TIM_SET_COUNTER(&htim1,0);
-  while (__HAL_TIM_GET_COUNTER(&htim1) < us);
+  ResetTimer1Counter();
+  while (GetTimer1Counter() < us);
 }
 
 /* USER CODE END 0 */
@@ -165,7 +178,7 @@ int main(void)
     Error_Handler ();
   }
 
-  if (HAL_OK != HAL_DMA_Start_IT(&hdma_tim3_ch1, (uint32_t)&(TIM2->CNT), (uint32_t)&(msg.adcTime), (uint32_t)1))
+  if (HAL_OK != HAL_DMA_Start(&hdma_tim3_ch1, (uint32_t)&(TIM2->CNT), (uint32_t)&(msg.adcTime), (uint32_t)1))
   {
     Error_Handler ();
   }
@@ -182,14 +195,20 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
+    //start measuring execution time
+    ResetTimer1Counter();
+
     MsgType tempMsg = {0};
+    //disabling interrupt will prevent a spike in PPS (data race: uart reading msg, pps writing to msg)
     HAL_NVIC_DisableIRQ(TIM2_IRQn);
     memcpy(&tempMsg, &msg, sizeof(MsgType));
     HAL_NVIC_EnableIRQ(TIM2_IRQn);
-    //HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_SET);
+
     UartSend(&huart4, (uint8_t*)&tempMsg, sizeof(MsgType));
-    Delay_us(765);
-    //HAL_GPIO_WritePin(GPIOA, GPIO_PIN_11, GPIO_PIN_RESET);
+
+    uint32_t executionTimeUs = GetTimer1Counter();
+    Delay_us(executionTimeUs < sendUartPeriodUs ? sendUartPeriodUs - executionTimeUs : 0u );
   }
   /* USER CODE END 3 */
 }
@@ -433,9 +452,9 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 0;
+  htim3.Init.Prescaler = tim3Prescaler;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 16999;
+  htim3.Init.Period = 1;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
